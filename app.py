@@ -1,15 +1,25 @@
+import os
 from flask import Flask, render_template, request, redirect, url_for, flash
 from models import db, User, Expense, Budget
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from datetime import datetime, date
 
+# Setup absolute path for SQLite (Critical for deployment)
+basedir = os.path.abspath(os.path.dirname(__file__))
+
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'database.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'your_secret_key_change_in_production'
 
+# Initialize Database
 db.init_app(app)
 
+# Ensure tables are created automatically on startup (Fixes the "no such table" error)
+with app.app_context():
+    db.create_all()
+
+# Login Manager Setup
 login_manager = LoginManager()
 login_manager.login_view = 'login'
 login_manager.init_app(app)
@@ -37,7 +47,7 @@ def index():
     monthly_budget = budget_obj.monthly_budget if budget_obj else 0
     remaining = max(0, monthly_budget - total_spent)
 
-    # Category breakdown for chart - JSON SAFE
+    # Category breakdown for chart
     categories = {}
     for e in expenses:
         categories[e.category] = categories.get(e.category, 0) + e.amount
@@ -47,7 +57,7 @@ def index():
                          total_spent=total_spent,
                          monthly_budget=monthly_budget, 
                          remaining=remaining,
-                         chart_data=categories)  # ✅ Fixed: chart_data for template
+                         chart_data=categories)
 
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
@@ -117,7 +127,7 @@ def add_expense():
             amount=amount, 
             category=category, 
             note=note, 
-            date=datetime.utcnow().date(),
+            date=date.today(), # Changed to date.today() for local time consistency
             user_id=current_user.id
         )
         db.session.add(expense)
@@ -140,10 +150,14 @@ def set_budget():
             flash('Budget cannot be negative.')
             return redirect(url_for('index'))
 
-        # Delete existing budget and create new one
-        Budget.query.filter_by(user_id=current_user.id).delete()
-        budget = Budget(monthly_budget=amount, user_id=current_user.id)
-        db.session.add(budget)
+        # Check for existing budget for current user
+        budget = Budget.query.filter_by(user_id=current_user.id).first()
+        if budget:
+            budget.monthly_budget = amount
+        else:
+            budget = Budget(monthly_budget=amount, user_id=current_user.id)
+            db.session.add(budget)
+            
         db.session.commit()
         flash('Budget updated successfully!')
     except ValueError:
@@ -155,6 +169,4 @@ def set_budget():
     return redirect(url_for('index'))
 
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
     app.run(debug=True)
